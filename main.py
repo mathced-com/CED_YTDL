@@ -15,7 +15,7 @@ import shutil
 import ssl
 
 ssl._create_default_https_context = ssl._create_unverified_context
-APP_VERSION = "1.0.7"
+APP_VERSION = "1.0.8"
 GITHUB_REPO = "mathced-com/CED_YTDL"
 
 try:
@@ -312,35 +312,48 @@ class YouTubeDownloaderGUI:
     def perform_update(self, download_url):
         self.download_btn.config(state="disabled")
         self.analyze_btn.config(state="disabled")
-        self.update_progress_ui(0, "正在下載新版本，請勿關閉程式...", "orange")
+        self.update_progress_ui(0, "正在準備下載新版本...", "orange")
         
         def run_update():
             try:
+                def reporthook(blocknum, blocksize, totalsize):
+                    if totalsize > 0:
+                        readsofar = blocknum * blocksize
+                        percent = min(100.0, (readsofar / totalsize) * 100)
+                        self.root.after(0, lambda: self.update_progress_ui(percent, f"正在下載新版本... ({percent:.1f}%)", "orange"))
+
                 new_exe_name = "CED_YTDL_update.exe"
                 new_exe_path = os.path.join(self.app_dir, new_exe_name)
-                urllib.request.urlretrieve(download_url, new_exe_path)
+                urllib.request.urlretrieve(download_url, new_exe_path, reporthook=reporthook)
                 
-                # 取得目前執行檔的名稱
-                current_exe_name = os.path.basename(sys.executable if getattr(sys, 'frozen', False) else sys.argv[0])
-                if not current_exe_name.endswith('.exe'):
-                    current_exe_name = "CED_YTDL.exe" # 預設名稱
+                self.root.after(0, lambda: self.update_progress_ui(100, "新版本下載完成！等待確認重啟...", "green"))
                 
-                bat_path = os.path.join(self.app_dir, "update_helper.bat")
-                bat_content = f"""@echo off
-chcp 65001 >nul
-cd /d "{self.app_dir}"
-echo 正在更新 CED_YTDL... 請稍候。
-timeout /t 2 /nobreak >nul
-del "{current_exe_name}"
-ren "{new_exe_name}" "{current_exe_name}"
-start "" "{current_exe_name}"
-del "%~f0"
-"""
-                with open(bat_path, "w", encoding="utf-8") as f:
-                    f.write(bat_content)
+                def ask_restart():
+                    if messagebox.askyesno("更新準備就緒", "新版本已下載完畢！\n\n程式必須關閉才能進行更新替換，更新完成後將會自動重新開啟。\n\n請問是否立即關閉並更新？"):
+                        # 取得目前執行檔的名稱
+                        current_exe_name = os.path.basename(sys.executable if getattr(sys, 'frozen', False) else sys.argv[0])
+                        if not current_exe_name.endswith('.exe'):
+                            current_exe_name = "CED_YTDL.exe" # 預設名稱
+                        
+                        bat_path = os.path.join(self.app_dir, "update_helper.bat")
+                        bat_content = f"""@echo off\nchcp 65001 >nul\ncd /d "{self.app_dir}"\necho 正在更新 CED_YTDL... 請稍候。\ntimeout /t 2 /nobreak >nul\ndel "{current_exe_name}"\nren "{new_exe_name}" "{current_exe_name}"\nstart "" "{current_exe_name}"\ndel "%~f0"\n"""
+                        with open(bat_path, "w", encoding="utf-8") as f:
+                            f.write(bat_content)
+                        
+                        subprocess.Popen(f'"{bat_path}"', cwd=self.app_dir, shell=True)
+                        os._exit(0)
+                    else:
+                        if os.path.exists(new_exe_path):
+                            try:
+                                os.remove(new_exe_path)
+                            except:
+                                pass
+                        self.update_progress_ui(0, "已取消更新安裝", "blue")
+                        self.download_btn.config(state="normal" if self.video_info else "disabled")
+                        self.analyze_btn.config(state="normal")
+                        
+                self.root.after(0, ask_restart)
                 
-                subprocess.Popen(f'"{bat_path}"', cwd=self.app_dir, shell=True)
-                os._exit(0)
             except Exception as e:
                 self.root.after(0, lambda: messagebox.showerror("錯誤", f"更新失敗：\n{e}"))
                 self.root.after(0, lambda: self.update_progress_ui(0, "更新失敗", "red"))
