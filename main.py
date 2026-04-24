@@ -15,7 +15,7 @@ import shutil
 import ssl
 
 ssl._create_default_https_context = ssl._create_unverified_context
-APP_VERSION = "1.0.10"
+APP_VERSION = "1.1.0"
 GITHUB_REPO = "mathced-com/CED_YTDL"
 
 try:
@@ -159,7 +159,9 @@ class YouTubeDownloaderGUI:
         self.cancel_btn = tk.Button(btn_frame, text="取消", font=("Arial", 10), command=self.cancel_download, state="disabled", bg="#f44336", fg="white", width=8)
         self.cancel_btn.pack(side="left", padx=5)
         
-        tk.Button(btn_frame, text="檢查更新 yt-dlp", command=self.update_ytdlp).pack(side="left", padx=15)
+        if not getattr(sys, 'frozen', False):
+            tk.Button(btn_frame, text="更新 yt-dlp (開發者模式)", command=self.update_ytdlp).pack(side="left", padx=15)
+            
         tk.Button(btn_frame, text="檢查主程式更新", command=self.check_app_update, bg="#FF9800", fg="white").pack(side="left", padx=5)
 
     def select_all(self):
