@@ -15,7 +15,7 @@ import shutil
 import ssl
 
 ssl._create_default_https_context = ssl._create_unverified_context
-APP_VERSION = "1.0.8"
+APP_VERSION = "1.0.9"
 GITHUB_REPO = "mathced-com/CED_YTDL"
 
 try:
@@ -107,6 +107,10 @@ class YouTubeDownloaderGUI:
         hint_label = tk.Label(url_frame, text=hint_text, fg="#E91E63", font=("Arial", 9, "bold"), justify="left")
         hint_label.pack(side="left", padx=5)
         
+        # 先建立底部框架並鎖定在視窗最下方，保證不被清單擠出畫面
+        bottom_frame = tk.Frame(self.root)
+        bottom_frame.pack(side="bottom", fill="x", pady=5)
+        
         self.info_frame = tk.LabelFrame(self.root, text="影片預覽 / 播放清單", font=("Arial", 10))
         self.info_frame.pack(fill="both", expand=True, padx=20, pady=5)
         
@@ -119,7 +123,7 @@ class YouTubeDownloaderGUI:
         tk.Button(self.select_btn_frame, text="全部勾選", command=self.select_all).pack(side="left", padx=5)
         tk.Button(self.select_btn_frame, text="取消全選", command=self.deselect_all).pack(side="left", padx=5)
         
-        format_frame = tk.Frame(self.root)
+        format_frame = tk.Frame(bottom_frame)
         format_frame.pack(fill="x", padx=20, pady=5)
         tk.Label(format_frame, text="格式：", font=("Arial", 12)).pack(side="left")
         tk.Radiobutton(format_frame, text="MP4", variable=self.format_choice, value="mp4", command=self.update_quality_options).pack(side="left", padx=2)
@@ -129,14 +133,14 @@ class YouTubeDownloaderGUI:
         self.quality_combo = ttk.Combobox(format_frame, textvariable=self.quality_choice, state="readonly", width=18)
         self.quality_combo.pack(side="left", padx=5)
         
-        path_frame = tk.Frame(self.root)
+        path_frame = tk.Frame(bottom_frame)
         path_frame.pack(fill="x", padx=20, pady=5)
         tk.Label(path_frame, text="儲存：", font=("Arial", 12)).pack(side="left")
         self.path_entry = tk.Entry(path_frame, textvariable=self.download_path, width=40, state="readonly", font=("Arial", 10))
         self.path_entry.pack(side="left", padx=5, fill="x", expand=True)
         tk.Button(path_frame, text="選擇資料夾", command=self.browse_folder).pack(side="left")
         
-        status_frame = tk.Frame(self.root)
+        status_frame = tk.Frame(bottom_frame)
         status_frame.pack(fill="x", padx=20, pady=5)
         self.progress_bar = ttk.Progressbar(status_frame, orient="horizontal", length=700, mode="determinate")
         self.progress_bar.pack(pady=2)
@@ -144,7 +148,7 @@ class YouTubeDownloaderGUI:
         self.status_label.pack(pady=2)
         
         # 執行與控制按鈕區
-        btn_frame = tk.Frame(self.root)
+        btn_frame = tk.Frame(bottom_frame)
         btn_frame.pack(pady=5)
         self.download_btn = tk.Button(btn_frame, text="開始下載", font=("Arial", 12, "bold"), bg="#4CAF50", fg="white", width=12, command=self.start_download, state="disabled")
         self.download_btn.pack(side="left", padx=5)
@@ -412,7 +416,22 @@ class YouTubeDownloaderGUI:
             if 'entries' in info:
                 self.is_playlist = True
                 entries = list(info.get('entries') or [])
-                self.root.after(0, lambda: self.show_playlist(info.get('title', '播放清單'), entries))
+                total = len(entries)
+                if total > 50:
+                    def ask_playlist_action():
+                        msg = f"偵測到龐大的播放清單 (共 {total} 部影片)！\n\n請選擇後續動作：\n\n【是】載入前 50 筆清單讓我手動勾選。\n【否】不展開清單，直接下載全部。\n【取消】取消解析。"
+                        res = messagebox.askyesnocancel("播放清單處理方式", msg)
+                        if res is True:
+                            self.show_playlist(info.get('title', '播放清單'), entries[:50])
+                        elif res is False:
+                            self.show_playlist_summary(info.get('title', '播放清單'), entries)
+                        else:
+                            self.update_progress_ui(0, "已取消解析", "blue")
+                            self.analyze_btn.config(state="normal")
+                            self.title_label.config(text="請輸入網址並點選「解析網址」")
+                    self.root.after(0, ask_playlist_action)
+                else:
+                    self.root.after(0, lambda: self.show_playlist(info.get('title', '播放清單'), entries))
             else:
                 self.is_playlist = False
                 title = info.get('title', '未知影片標題')
@@ -433,6 +452,25 @@ class YouTubeDownloaderGUI:
         m, s = divmod(int(seconds), 60)
         h, m = divmod(m, 60)
         return f" [{h}:{m:02d}:{s:02d}]" if h else f" [{m:02d}:{s:02d}]"
+
+    def show_playlist_summary(self, title, entries):
+        self.title_label.config(text=f"【播放清單】\n{title} (共 {len(entries)} 部影片)")
+        for widget in self.list_frame.scrollable_frame.winfo_children():
+            widget.destroy()
+            
+        self.list_frame.pack(fill="both", expand=True, padx=10, pady=5)
+        self.select_btn_frame.pack_forget()
+        
+        row_frame = tk.Frame(self.list_frame.scrollable_frame, pady=5)
+        row_frame.pack(fill="x", anchor="w")
+        
+        txt_label = tk.Label(row_frame, text=f"💡 為避免介面卡頓，已隱藏清單明細。\n\n共有 {len(entries)} 部影片已準備就緒！\n請確認下方的「格式」與「儲存資料夾」無誤後，點擊「開始下載」即可自動下載全集。", justify="left", wraplength=500, font=("Arial", 11, "bold"), fg="#2196F3")
+        txt_label.pack(side="left", anchor="w", padx=20, pady=20)
+        
+        self.playlist_entries = entries
+        self.playlist_vars = []  # 空的 var 代表總結模式 (全選)
+        self.download_btn.config(state="normal")
+        self.update_progress_ui(0, "解析完成！點擊「開始下載」以下載全集", "green")
 
     def show_single_video(self, title, dur_str, thumb_url):
         self.title_label.config(text="【單一影片解析結果】")
@@ -549,7 +587,12 @@ class YouTubeDownloaderGUI:
         
         urls_to_download = []
         if self.is_playlist:
-            selected_indices = [i for i, var in enumerate(self.playlist_vars) if var.get()]
+            if not self.playlist_vars:
+                # 總結模式：全部下載
+                selected_indices = list(range(len(self.playlist_entries)))
+            else:
+                selected_indices = [i for i, var in enumerate(self.playlist_vars) if var.get()]
+                
             if not selected_indices:
                 messagebox.showwarning("提示", "請至少在清單中勾選一部影片！")
                 return
