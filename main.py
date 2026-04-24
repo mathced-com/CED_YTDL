@@ -15,7 +15,7 @@ import shutil
 import ssl
 
 ssl._create_default_https_context = ssl._create_unverified_context
-APP_VERSION = "1.0.6"
+APP_VERSION = "1.0.7"
 GITHUB_REPO = "mathced-com/CED_YTDL"
 
 try:
@@ -316,26 +316,30 @@ class YouTubeDownloaderGUI:
         
         def run_update():
             try:
-                new_exe = "CED_YTDL_update.exe"
-                urllib.request.urlretrieve(download_url, new_exe)
+                new_exe_name = "CED_YTDL_update.exe"
+                new_exe_path = os.path.join(self.app_dir, new_exe_name)
+                urllib.request.urlretrieve(download_url, new_exe_path)
                 
-                # 取得目前執行檔的名稱 (如果是 exe 就是 xxx.exe，如果是 py 就是 main.py)
-                current_exe = os.path.basename(sys.argv[0])
-                if not current_exe.endswith('.exe'):
-                    current_exe = "CED_YTDL.exe" # 預設名稱
+                # 取得目前執行檔的名稱
+                current_exe_name = os.path.basename(sys.executable if getattr(sys, 'frozen', False) else sys.argv[0])
+                if not current_exe_name.endswith('.exe'):
+                    current_exe_name = "CED_YTDL.exe" # 預設名稱
                 
+                bat_path = os.path.join(self.app_dir, "update_helper.bat")
                 bat_content = f"""@echo off
-echo Updating CED_YTDL... Please wait.
+chcp 65001 >nul
+cd /d "{self.app_dir}"
+echo 正在更新 CED_YTDL... 請稍候。
 timeout /t 2 /nobreak >nul
-del "{current_exe}"
-ren "{new_exe}" "{current_exe}"
-start "" "{current_exe}"
+del "{current_exe_name}"
+ren "{new_exe_name}" "{current_exe_name}"
+start "" "{current_exe_name}"
 del "%~f0"
 """
-                with open("update_helper.bat", "w", encoding="utf-8") as f:
+                with open(bat_path, "w", encoding="utf-8") as f:
                     f.write(bat_content)
                 
-                subprocess.Popen("update_helper.bat", shell=True)
+                subprocess.Popen(f'"{bat_path}"', cwd=self.app_dir, shell=True)
                 os._exit(0)
             except Exception as e:
                 self.root.after(0, lambda: messagebox.showerror("錯誤", f"更新失敗：\n{e}"))
@@ -378,7 +382,9 @@ del "%~f0"
         query_params = urllib.parse.parse_qs(parsed_url.query)
         if 'list' in query_params:
             playlist_id = query_params['list'][0]
-            url = f"https://www.youtube.com/playlist?list={playlist_id}"
+            # YT Mix (合輯) 的清單 ID 通常以 RD 開頭，這種清單不能直接轉換為 /playlist?list= 否則會報錯
+            if not playlist_id.startswith("RD"):
+                url = f"https://www.youtube.com/playlist?list={playlist_id}"
 
         ydl_opts = {
             'extract_flat': True, 
