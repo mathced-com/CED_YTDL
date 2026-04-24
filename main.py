@@ -15,7 +15,7 @@ import shutil
 import ssl
 
 ssl._create_default_https_context = ssl._create_unverified_context
-APP_VERSION = "1.0.9"
+APP_VERSION = "1.0.10"
 GITHUB_REPO = "mathced-com/CED_YTDL"
 
 try:
@@ -340,7 +340,7 @@ class YouTubeDownloaderGUI:
                             current_exe_name = "CED_YTDL.exe" # 預設名稱
                         
                         bat_path = os.path.join(self.app_dir, "update_helper.bat")
-                        bat_content = f"""@echo off\nchcp 65001 >nul\ncd /d "{self.app_dir}"\necho 正在更新 CED_YTDL... 請稍候。\ntimeout /t 2 /nobreak >nul\ndel "{current_exe_name}"\nren "{new_exe_name}" "{current_exe_name}"\nstart "" "{current_exe_name}"\ndel "%~f0"\n"""
+                        bat_content = f"""@echo off\nchcp 65001 >nul\ncd /d "{self.app_dir}"\necho 正在更新 CED_YTDL... 請稍候。\n:wait_loop\ntimeout /t 1 /nobreak >nul\ndel "{current_exe_name}" >nul 2>&1\nif exist "{current_exe_name}" goto wait_loop\nren "{new_exe_name}" "{current_exe_name}"\nstart "" "{current_exe_name}"\ndel "%~f0"\n"""
                         with open(bat_path, "w", encoding="utf-8") as f:
                             f.write(bat_content)
                         
