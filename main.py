@@ -15,7 +15,7 @@ import shutil
 import ssl
 
 ssl._create_default_https_context = ssl._create_unverified_context
-APP_VERSION = "1.0.4"
+APP_VERSION = "1.0.5"
 GITHUB_REPO = "mathced-com/CED_YTDL"
 
 try:
@@ -213,13 +213,20 @@ class YouTubeDownloaderGUI:
             return
             
         def download_ffmpeg():
-            self.update_progress_ui(0, "首次啟動：正在背景下載 FFmpeg 元件 (約 40MB)，請稍候...", "orange")
-            self.download_btn.config(state="disabled")
-            self.analyze_btn.config(state="disabled")
+            self.root.after(0, lambda: self.update_progress_ui(0, "首次啟動：準備下載 FFmpeg 元件...", "orange"))
+            self.root.after(0, lambda: self.download_btn.config(state="disabled"))
+            self.root.after(0, lambda: self.analyze_btn.config(state="disabled"))
             try:
+                def reporthook(blocknum, blocksize, totalsize):
+                    if totalsize > 0:
+                        readsofar = blocknum * blocksize
+                        percent = min(100.0, (readsofar / totalsize) * 100)
+                        self.root.after(0, lambda: self.update_progress_ui(percent, f"首次啟動：正在下載 FFmpeg 元件... ({percent:.1f}%)", "orange"))
+
                 url = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"
-                urllib.request.urlretrieve(url, "ffmpeg.zip")
-                self.update_progress_ui(0, "下載完成，正在提取元件...", "orange")
+                urllib.request.urlretrieve(url, "ffmpeg.zip", reporthook=reporthook)
+                
+                self.root.after(0, lambda: self.update_progress_ui(100, "下載完成，正在提取元件 (這需要幾十秒，請耐心等候)...", "orange"))
                 with zipfile.ZipFile("ffmpeg.zip", 'r') as zip_ref:
                     bin_path = None
                     for name in zip_ref.namelist():
@@ -232,10 +239,10 @@ class YouTubeDownloaderGUI:
                             target = os.path.join(os.getcwd(), exe)
                             with zip_ref.open(source) as zf, open(target, 'wb') as f:
                                 shutil.copyfileobj(zf, f)
-                self.update_progress_ui(0, "元件配置完成，可以開始使用！", "green")
+                self.root.after(0, lambda: self.update_progress_ui(0, "元件配置完成，可以開始使用！", "green"))
             except Exception as e:
                 self.root.after(0, lambda: messagebox.showerror("錯誤", f"FFmpeg 下載失敗：\n{e}"))
-                self.update_progress_ui(0, "環境不完整，可能無法進行影片轉檔", "red")
+                self.root.after(0, lambda: self.update_progress_ui(0, "環境不完整，可能無法進行影片轉檔", "red"))
             finally:
                 if os.path.exists("ffmpeg.zip"):
                     try:
