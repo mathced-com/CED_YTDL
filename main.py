@@ -15,7 +15,7 @@ import shutil
 import ssl
 
 ssl._create_default_https_context = ssl._create_unverified_context
-APP_VERSION = "1.0.5"
+APP_VERSION = "1.0.6"
 GITHUB_REPO = "mathced-com/CED_YTDL"
 
 try:
@@ -59,7 +59,11 @@ class YouTubeDownloaderGUI:
         self.root.geometry("750x650")
         self.root.resizable(False, False)
         
-        self.download_path = tk.StringVar(value=os.path.join(os.getcwd(), "Downloads"))
+        self.app_dir = os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) else os.path.dirname(os.path.abspath(__file__))
+        
+        default_dl_dir = os.path.join(self.app_dir, "download")
+        os.makedirs(default_dl_dir, exist_ok=True)
+        self.download_path = tk.StringVar(value=default_dl_dir)
         self.format_choice = tk.StringVar(value="mp4")
         self.quality_choice = tk.StringVar()
         
@@ -82,7 +86,7 @@ class YouTubeDownloaderGUI:
             messagebox.showwarning("缺少套件", "系統缺少 Pillow 套件，將無法顯示影片封面。")
 
     def create_widgets(self):
-        title_label = tk.Label(self.root, text="CED_YouTube 下載器", font=("Arial", 16, "bold"))
+        title_label = tk.Label(self.root, text=f"CED_YouTube 下載器 v{APP_VERSION}", font=("Arial", 16, "bold"))
         title_label.pack(pady=10)
         
         url_frame = tk.Frame(self.root)
@@ -99,7 +103,8 @@ class YouTubeDownloaderGUI:
         self.clear_btn.pack(side="left", padx=2)
         
         # 步驟提示
-        hint_label = tk.Label(url_frame, text="💡 步驟：1.解析網址 ➔ 2.開始下載", fg="#E91E63", font=("Arial", 9, "bold"))
+        hint_text = "執行步驟：\n一、貼上Youtube網址\n二、點擊「解析網址」\n三、點擊「開始下載」"
+        hint_label = tk.Label(url_frame, text=hint_text, fg="#E91E63", font=("Arial", 9, "bold"), justify="left")
         hint_label.pack(side="left", padx=5)
         
         self.info_frame = tk.LabelFrame(self.root, text="影片預覽 / 播放清單", font=("Arial", 10))
@@ -209,7 +214,10 @@ class YouTubeDownloaderGUI:
         threading.Thread(target=run_update, daemon=True).start()
 
     def check_ffmpeg_environment(self):
-        if os.path.exists("ffmpeg.exe") and os.path.exists("ffprobe.exe"):
+        ffmpeg_exe = os.path.join(self.app_dir, "ffmpeg.exe")
+        ffprobe_exe = os.path.join(self.app_dir, "ffprobe.exe")
+        
+        if os.path.exists(ffmpeg_exe) and os.path.exists(ffprobe_exe):
             return
             
         def download_ffmpeg():
@@ -224,10 +232,11 @@ class YouTubeDownloaderGUI:
                         self.root.after(0, lambda: self.update_progress_ui(percent, f"首次啟動：正在下載 FFmpeg 元件... ({percent:.1f}%)", "orange"))
 
                 url = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"
-                urllib.request.urlretrieve(url, "ffmpeg.zip", reporthook=reporthook)
+                zip_path = os.path.join(self.app_dir, "ffmpeg.zip")
+                urllib.request.urlretrieve(url, zip_path, reporthook=reporthook)
                 
                 self.root.after(0, lambda: self.update_progress_ui(100, "下載完成，正在提取元件 (這需要幾十秒，請耐心等候)...", "orange"))
-                with zipfile.ZipFile("ffmpeg.zip", 'r') as zip_ref:
+                with zipfile.ZipFile(zip_path, 'r') as zip_ref:
                     bin_path = None
                     for name in zip_ref.namelist():
                         if name.endswith('bin/ffmpeg.exe'):
@@ -236,7 +245,7 @@ class YouTubeDownloaderGUI:
                     if bin_path:
                         for exe in ['ffmpeg.exe', 'ffprobe.exe']:
                             source = f"{bin_path}/{exe}"
-                            target = os.path.join(os.getcwd(), exe)
+                            target = os.path.join(self.app_dir, exe)
                             with zip_ref.open(source) as zf, open(target, 'wb') as f:
                                 shutil.copyfileobj(zf, f)
                 self.root.after(0, lambda: self.update_progress_ui(0, "元件配置完成，可以開始使用！", "green"))
@@ -244,9 +253,9 @@ class YouTubeDownloaderGUI:
                 self.root.after(0, lambda: messagebox.showerror("錯誤", f"FFmpeg 下載失敗：\n{e}"))
                 self.root.after(0, lambda: self.update_progress_ui(0, "環境不完整，可能無法進行影片轉檔", "red"))
             finally:
-                if os.path.exists("ffmpeg.zip"):
+                if os.path.exists(zip_path):
                     try:
-                        os.remove("ffmpeg.zip")
+                        os.remove(zip_path)
                     except:
                         pass
                 self.root.after(0, lambda: self.download_btn.config(state="normal" if self.video_info else "disabled"))
@@ -567,7 +576,7 @@ del "%~f0"
                 'format': format_str,
                 'merge_output_format': 'mp4',
                 'progress_hooks': [self.progress_hook],
-                'ffmpeg_location': os.getcwd(),
+                'ffmpeg_location': self.app_dir,
                 'color': 'no_color'
             }
         else:
@@ -587,7 +596,7 @@ del "%~f0"
                     'preferredquality': kbps,
                 }],
                 'progress_hooks': [self.progress_hook],
-                'ffmpeg_location': os.getcwd(),
+                'ffmpeg_location': self.app_dir,
                 'color': 'no_color'
             }
             
