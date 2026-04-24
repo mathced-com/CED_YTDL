@@ -15,7 +15,7 @@ import shutil
 import ssl
 
 ssl._create_default_https_context = ssl._create_unverified_context
-APP_VERSION = "1.0.3"
+APP_VERSION = "1.0.4"
 GITHUB_REPO = "mathced-com/CED_YTDL"
 
 try:
@@ -193,6 +193,11 @@ class YouTubeDownloaderGUI:
             self.download_path.set(folder)
 
     def update_ytdlp(self):
+        # 如果是打包好的 exe 版本，yt-dlp 已經被封裝在裡面，無法透過 pip 單獨更新
+        if getattr(sys, 'frozen', False):
+            messagebox.showinfo("提示", "您目前使用的是免安裝執行檔版本，yt-dlp 下載核心已直接整合於主程式中。\n\n如需更新下載核心，請直接點選旁邊的「檢查主程式更新」按鈕即可！")
+            return
+            
         self.update_progress_ui(0, "正在更新 yt-dlp... 請稍候", "orange")
         def run_update():
             result = os.system(f"{sys.executable} -m pip install -U yt-dlp")
