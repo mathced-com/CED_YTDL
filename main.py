@@ -15,7 +15,7 @@ import shutil
 import ssl
 
 ssl._create_default_https_context = ssl._create_unverified_context
-APP_VERSION = "1.2.4"
+APP_VERSION = "1.2.5"
 GITHUB_REPO = "mathced-com/CYT_YTDL"
 
 try:
@@ -386,7 +386,8 @@ class YouTubeDownloaderGUI:
                                     path_list = [p for p in path_list if p != sys._MEIPASS]
                                     env['PATH'] = os.pathsep.join(path_list)
                                 
-                                subprocess.Popen([current_exe_path], env=env)
+                                # 必須指定 cwd，否則新程式會繼承到舊程式的暫存目錄作為工作目錄，導致舊目錄無法被刪除
+                                subprocess.Popen([current_exe_path], cwd=os.path.dirname(current_exe_path), env=env)
                                 os._exit(0)
                             except Exception as e:
                                 messagebox.showerror("錯誤", f"替換檔案失敗，請檢查權限：\n{e}")
