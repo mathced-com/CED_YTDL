@@ -15,7 +15,7 @@ import shutil
 import ssl
 
 ssl._create_default_https_context = ssl._create_unverified_context
-APP_VERSION = "1.2.1"
+APP_VERSION = "1.2.2"
 GITHUB_REPO = "mathced-com/CYT_YTDL"
 
 try:
@@ -72,8 +72,14 @@ class YouTubeDownloaderGUI:
             self.root.iconbitmap(resource_path("icon.ico"))
         except Exception:
             pass
-        
-
+            
+        # 清理更新時遺留的舊版檔案
+        for f in os.listdir(self.app_dir):
+            if f.endswith('.old'):
+                try:
+                    os.remove(os.path.join(self.app_dir, f))
+                except Exception:
+                    pass
         
         default_dl_dir = os.path.join(self.app_dir, "download")
         os.makedirs(default_dl_dir, exist_ok=True)
@@ -349,19 +355,24 @@ class YouTubeDownloaderGUI:
                 self.root.after(0, lambda: self.update_progress_ui(100, "新版本下載完成！等待確認重啟...", "green"))
                 
                 def ask_restart():
-                    if messagebox.askyesno("更新準備就緒", "新版本已下載完畢！\n\n程式必須關閉才能進行更新替換，更新完成後將會自動重新開啟。\n\n請問是否立即關閉並更新？"):
-                        # 取得目前執行檔的名稱
-                        current_exe_name = os.path.basename(sys.executable if getattr(sys, 'frozen', False) else sys.argv[0])
-                        if not current_exe_name.endswith('.exe'):
-                            current_exe_name = "CYT_YTDL.exe" # 預設名稱
-                        
-                        bat_path = os.path.join(self.app_dir, "update_helper.bat")
-                        bat_content = f"""@echo off\nchcp 65001 >nul\ncd /d "{self.app_dir}"\necho 正在更新 CYT_YTDL... 請稍候。\n:wait_loop\ntimeout /t 1 /nobreak >nul\ndel "{current_exe_name}" >nul 2>&1\nif exist "{current_exe_name}" goto wait_loop\nren "{new_exe_name}" "{current_exe_name}"\nstart "" "{current_exe_name}"\ndel "%~f0"\n"""
-                        with open(bat_path, "w", encoding="utf-8") as f:
-                            f.write(bat_content)
-                        
-                        subprocess.Popen(f'"{bat_path}"', cwd=self.app_dir, shell=True)
-                        os._exit(0)
+                    if messagebox.askyesno("更新準備就緒", "新版本已下載完畢！\n\n程式將立刻重新啟動以套用更新。\n\n請問是否立即重啟？"):
+                        if getattr(sys, 'frozen', False):
+                            current_exe_path = sys.executable
+                            old_exe_path = current_exe_path + ".old"
+                            
+                            try:
+                                if os.path.exists(old_exe_path):
+                                    os.remove(old_exe_path)
+                                os.rename(current_exe_path, old_exe_path)
+                                os.rename(new_exe_path, current_exe_path)
+                                subprocess.Popen([current_exe_path])
+                                os._exit(0)
+                            except Exception as e:
+                                messagebox.showerror("錯誤", f"替換檔案失敗，請檢查權限：\n{e}")
+                                self.update_progress_ui(0, "更新失敗", "red")
+                        else:
+                            messagebox.showinfo("開發者模式", "您目前在開發環境下，請手動更新程式碼即可。")
+                            self.update_progress_ui(0, "開發環境無需更新", "blue")
                     else:
                         if os.path.exists(new_exe_path):
                             try:
