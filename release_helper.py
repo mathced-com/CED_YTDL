@@ -85,7 +85,7 @@ def main():
     print("\n[3/6] 正在打包成執行檔 (這需要 1~2 分鐘，請耐心等候)...")
     print("      (正在確認 PyInstaller 封裝套件是否安裝)")
     subprocess.run(["py", "-3", "-m", "pip", "install", "pyinstaller"], capture_output=True)
-    subprocess.run(["py", "-3", "-m", "PyInstaller", "--noconfirm", "--onefile", "--windowed", "--name", "CYT_YTDL", "main.py"])
+    subprocess.run(["py", "-3", "-m", "PyInstaller", "--noconfirm", "--onefile", "--windowed", "--icon=icon.ico", "--add-data", "icon.ico;.", "--name", "CYT_YTDL", "main.py"])
     
     exe_path = os.path.join("dist", "CYT_YTDL.exe")
     if not os.path.exists(exe_path):

@@ -15,7 +15,7 @@ import shutil
 import ssl
 
 ssl._create_default_https_context = ssl._create_unverified_context
-APP_VERSION = "1.2.0"
+APP_VERSION = "1.2.1"
 GITHUB_REPO = "mathced-com/CYT_YTDL"
 
 try:
@@ -59,7 +59,21 @@ class YouTubeDownloaderGUI:
         self.root.geometry("750x650")
         self.root.resizable(False, False)
         
+        def resource_path(relative_path):
+            try:
+                base_path = sys._MEIPASS
+            except Exception:
+                base_path = os.path.dirname(os.path.abspath(__file__))
+            return os.path.join(base_path, relative_path)
+        
         self.app_dir = os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) else os.path.dirname(os.path.abspath(__file__))
+        
+        try:
+            self.root.iconbitmap(resource_path("icon.ico"))
+        except Exception:
+            pass
+        
+
         
         default_dl_dir = os.path.join(self.app_dir, "download")
         os.makedirs(default_dl_dir, exist_ok=True)
