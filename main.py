@@ -15,7 +15,7 @@ import shutil
 import ssl
 
 ssl._create_default_https_context = ssl._create_unverified_context
-APP_VERSION = "1.2.12"
+APP_VERSION = "1.2.13"
 GITHUB_REPO = "mathced-com/CYT_YTDL"
 
 try:
@@ -398,37 +398,33 @@ class YouTubeDownloaderGUI:
                                 os.rename(current_exe_path, old_exe_path)
                                 os.rename(new_exe_path, current_exe_path)
                                 
-                                # 使用 os.startfile 完全等同於使用者親手雙擊檔案，
-                                # 它會透過 Windows Shell 啟動，徹底避免防毒軟體因為父子程序啟動而產生的攔截，
-                                # 同時也不會繼承到任何舊版的暫存工作目錄或污染的環境變數。
-                                # 建立一個完全乾淨的環境變數字典，移除所有 PyInstaller 的痕跡
-                                clean_env = os.environ.copy()
-                                for key in ['_MEIPASS2', '_MEIPASS', 'TCL_LIBRARY', 'TK_LIBRARY', 'PYTZ_TZDATADIR']:
-                                    clean_env.pop(key, None)
-                                
-                                # 從 PATH 中移除舊版的暫存路徑
-                                if hasattr(sys, '_MEIPASS'):
-                                    p = sys._MEIPASS.lower()
-                                    paths = clean_env.get('PATH', '').split(os.pathsep)
-                                    clean_env['PATH'] = os.pathsep.join([x for x in paths if x.lower() != p])
-                                
-                                # 終極重啟方案：透過 cmd.exe 執行延遲啟動
-                                # 1. timeout /t 1：等候一秒，確保父程序完全退出並釋放所有檔案鎖定
-                                # 2. start "" "exe路徑"：以完全獨立的背景進程啟動新程式
-                                # 這是解決 PyInstaller 暫存目錄刪除衝突最穩健的做法
-                                restart_cmd = f'timeout /t 1 /nobreak > NUL && start "" "{current_exe_path}"'
-                                
+                                # =====================================================================
+                                # 終極更新啟動方案：寫入磁碟的獨立啟動腳本
+                                # 原理：把一個 .bat 腳本寫到永久的資料夾，再用完全脫離的方式執行它。
+                                # 腳本在背景等待 3 秒，確保本程式的 PyInstaller 暫存目錄 (_MEIxxxxx)
+                                # 已被 bootloader 的 C 層清理完畢後，才啟動新版程式。
+                                # 這樣新版程式解壓縮時，就不會再誤用到任何舊的路徑。
+                                # =====================================================================
+                                exe_dir = os.path.dirname(current_exe_path)
+                                launcher_path = os.path.join(exe_dir, '_cyt_update_launch.bat')
+                                bat_content = (
+                                    '@echo off\r\n'
+                                    'timeout /t 3 /nobreak > NUL\r\n'
+                                    f'start "" "{current_exe_path}"\r\n'
+                                    f'del "%~f0"\r\n'  # 啟動完成後自我刪除
+                                )
                                 try:
+                                    with open(launcher_path, 'w', encoding='ascii') as f:
+                                        f.write(bat_content)
                                     subprocess.Popen(
-                                        restart_cmd,
-                                        shell=True,
-                                        env=clean_env,
-                                        cwd=os.path.dirname(current_exe_path),
-                                        creationflags=subprocess.CREATE_NO_WINDOW
+                                        ['cmd.exe', '/c', launcher_path],
+                                        creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW,
+                                        close_fds=True
                                     )
                                 except Exception:
+                                    # 備案：直接用 startfile
                                     os.startfile(current_exe_path)
-                                    
+                                
                                 os._exit(0)
                             except Exception as e:
                                 messagebox.showerror("錯誤", f"替換檔案失敗，請檢查權限：\n{e}")
