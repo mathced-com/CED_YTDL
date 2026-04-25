@@ -15,7 +15,7 @@ import shutil
 import ssl
 
 ssl._create_default_https_context = ssl._create_unverified_context
-APP_VERSION = "1.2.11"
+APP_VERSION = "1.2.12"
 GITHUB_REPO = "mathced-com/CYT_YTDL"
 
 try:
@@ -151,11 +151,15 @@ class YouTubeDownloaderGUI:
         self.title_label = tk.Label(self.info_frame, text="請輸入網址並點選「解析網址」", fg="gray", wraplength=650, justify="left")
         self.title_label.pack(pady=5, padx=10)
         
-        self.list_frame = ScrollableFrame(self.info_frame)
-        
         self.select_btn_frame = tk.Frame(self.info_frame)
-        tk.Button(self.select_btn_frame, text="全部勾選", command=self.select_all).pack(side="left", padx=5)
-        tk.Button(self.select_btn_frame, text="取消全選", command=self.deselect_all).pack(side="left", padx=5)
+        tk.Button(self.select_btn_frame, text="全部勾選", command=self.select_all, font=("Arial", 10), bg="#4CAF50", fg="white").pack(side="left", padx=5)
+        tk.Button(self.select_btn_frame, text="取消全選", command=self.deselect_all, font=("Arial", 10)).pack(side="left", padx=5)
+        # 預設先隱藏，待播放清單解析完後才顯示
+        # 必須先 pack 一次讓它加入佈局，再 pack_forget 隱藏，這樣之後 pack 才會出現在正確位置
+        self.select_btn_frame.pack(pady=3)
+        self.select_btn_frame.pack_forget()
+        
+        self.list_frame = ScrollableFrame(self.info_frame)
         
         format_frame = tk.Frame(bottom_frame)
         format_frame.pack(fill="x", padx=20, pady=5)
@@ -613,8 +617,8 @@ class YouTubeDownloaderGUI:
                 if url:
                     threading.Thread(target=self.load_thumbnail, args=(url, thumb_label), daemon=True).start()
 
+        self.select_btn_frame.pack(pady=3)
         self.list_frame.pack(fill="both", expand=True, padx=10, pady=5)
-        self.select_btn_frame.pack(pady=5)
         
         self.update_progress_ui(0, "解析完成！請勾選想下載的集數，點擊「開始下載」", "green")
         self.download_btn.config(state="normal")
