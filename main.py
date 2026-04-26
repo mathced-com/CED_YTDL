@@ -16,7 +16,7 @@ import ssl
 import ctypes
 
 ssl._create_default_https_context = ssl._create_unverified_context
-APP_VERSION = "2.0.1"
+APP_VERSION = "2.0.2"
 GITHUB_REPO = "mathced-com/CYT_YTDL"
 
 try:
@@ -106,22 +106,30 @@ class YouTubeDownloaderGUI:
             base_path = os.path.dirname(os.path.abspath(__file__))
         return os.path.join(base_path, relative_path)
 
+    def _on_tab_changed(self, event):
+        sel = self.notebook.select()
+        if not sel: return
+        text = self.notebook.tab(sel, "text")
+        if "裁剪" in text:
+            self.trimmer._refresh_list()
+        elif "合併" in text:
+            self.merger._refresh_src_list()
+
     def create_widgets(self):
         # === 全局標題列 (在 Notebook 之上) ===
-        header_frame = tk.Frame(self.root)
-        header_frame.pack(pady=8)
+        header_frame = tk.Frame(self.root, bg="white")
+        header_frame.pack(fill="x", pady=10)
         
         try:
-            logo_img = Image.open(self.resource_path("icon.ico")).resize((32, 32), Image.Resampling.LANCZOS)
+            logo_img = Image.open(self.resource_path("icon.png"))
+            logo_img = logo_img.resize((32, 32), Image.LANCZOS)
             self.logo_photo = ImageTk.PhotoImage(logo_img)
-            logo_label = tk.Label(header_frame, image=self.logo_photo)
-            logo_label.pack(side="left", padx=10)
+            tk.Label(header_frame, image=self.logo_photo, bg="white").pack(side="left", padx=(20, 10))
         except Exception:
             pass
             
-        title_label = tk.Label(header_frame, text=f"CYT_YouTube 下載器 v{APP_VERSION}", font=("Arial", 16, "bold"))
-        title_label.pack(side="left")
-        
+        tk.Label(header_frame, text=f"CYT_YouTube 下載器 v{APP_VERSION}", font=("Arial", 18, "bold"), bg="white").pack(side="left")
+
         # === 標簿頁 (Notebook) ===
         self.notebook = ttk.Notebook(self.root)
         self.notebook.pack(fill="both", expand=True, padx=10, pady=5)
@@ -140,8 +148,10 @@ class YouTubeDownloaderGUI:
         self.notebook.add(tab_merge, text="  🔗 MP3 合併工具  ")
         self.merger = MP3MergerTab(tab_merge, self.download_path)
         
+        self.notebook.bind("<<NotebookTabChanged>>", self._on_tab_changed)
+
         # === 以下為 Tab 1 (下載器) 的 UI ===
-        parent = tab_download  # 方便變數，保持原始程式碼結構
+        parent = tab_download
         
         url_frame = tk.Frame(parent)
         url_frame.pack(fill="x", padx=15, pady=5)
@@ -197,8 +207,8 @@ class YouTubeDownloaderGUI:
         tk.Label(path_frame, text="儲存：", font=("Arial", 12)).pack(side="left")
         self.path_entry = tk.Entry(path_frame, textvariable=self.download_path, width=40, state="readonly", font=("Arial", 10))
         self.path_entry.pack(side="left", padx=5, fill="x", expand=True)
-        tk.Button(path_frame, text="選擇資料夾", command=self.browse_folder).pack(side="left", padx=2)
-        tk.Button(path_frame, text="開啟資料夾", command=self.open_download_folder, bg="#9C27B0", fg="white").pack(side="left", padx=2)
+        tk.Button(path_frame, text="選擇", command=self.browse_folder).pack(side="left", padx=2)
+        tk.Button(path_frame, text="開啟", command=self.open_download_folder, bg="#9C27B0", fg="white").pack(side="left", padx=2)
         
         status_frame = tk.Frame(bottom_frame)
         status_frame.pack(fill="x", padx=15, pady=3)
@@ -933,6 +943,7 @@ class MP3TrimmerTab:
         self.folder_entry = tk.Entry(folder_frame, state="readonly", font=("Arial", 8))
         self.folder_entry.pack(side="left", fill="x", expand=True)
         tk.Button(folder_frame, text="選擇", command=self._browse_folder, font=("Arial", 8)).pack(side="left", padx=2)
+        tk.Button(folder_frame, text="開啟", command=self._open_folder, font=("Arial", 8)).pack(side="left", padx=2)
 
         self.file_listbox = tk.Listbox(left_frame, font=("Arial", 9), selectmode="single", activestyle="dotbox")
         self.file_listbox.pack(fill="both", expand=True, pady=5)
@@ -1061,6 +1072,13 @@ class MP3TrimmerTab:
             self._folder_path = folder
             self._update_folder_entry(folder)
             self._refresh_list()
+
+    def _open_folder(self):
+        folder = getattr(self, '_folder_path', self.download_path_var.get())
+        if os.path.exists(folder):
+            os.startfile(folder)
+        else:
+            messagebox.showerror("錯誤", "找不到指定的資料夾路徑。")
 
     def _update_folder_entry(self, path):
         self.folder_entry.config(state="normal")
@@ -1411,13 +1429,24 @@ class MP3MergerTab:
     def __init__(self, parent, download_path_var):
         self.parent = parent
         self.download_path_var = download_path_var
-        self.player = MCIPlayer()
         self.staged_files = []  # 存儲路徑
         self.staged_durations = []  # 存儲每首歌的長度 (ms)
         self.total_ms = 0
+        self.fade_var = tk.BooleanVar(value=False)
+        self.fade_sec = tk.IntVar(value=3)
+        
+        # 監聽融合設定，即時更新時間軸
+        self.fade_var.trace_add("write", lambda *args: self._update_total())
+        self.fade_sec.trace_add("write", lambda *args: self._update_total())
+        
         self._update_job = None
         self._seeking = False
         self._current_song_idx = -1
+        
+        # 使用雙播放器以實現預覽重疊
+        self.players = [MCIPlayer(alias="merger_p1"), MCIPlayer(alias="merger_p2")]
+        self.active_player_idx = 0
+        self._next_song_triggered = False 
         self._build_ui()
 
     def _build_ui(self):
@@ -1440,29 +1469,34 @@ class MP3MergerTab:
         left_frame.pack_propagate(False)
         tk.Label(left_frame, text="1. 來源 MP3 (可多選)", font=("Arial", 10, "bold")).pack(anchor="w")
         tk.Label(left_frame, text="💡 按住 Shift 點選前後可連續選取", font=("Arial", 8), fg="#666").pack(anchor="w")
+        
+        # 先 pack 下方按鈕，確保不會被清單擠掉
+        tk.Button(left_frame, text="🔄 重新整理", command=self._refresh_src_list, font=("Arial", 9)).pack(side="bottom", fill="x", pady=2)
+        tk.Button(left_frame, text="➕ 加入合併清單", command=self._add_to_merge, bg="#4CAF50", fg="white", font=("Arial", 10, "bold")).pack(side="bottom", fill="x")
+        
         # 支援自訂選取行為：單擊切換 + Shift 範圍選取
         self.src_listbox = tk.Listbox(left_frame, font=("Arial", 9), selectmode="extended")
         self.src_listbox.pack(fill="both", expand=True, pady=5)
         self.src_listbox.bind("<Button-1>", self._on_listbox_click)
-        self._last_idx = None # 紀錄上次點擊位置供 Shift 範圍選取使用
-        
-        tk.Button(left_frame, text="➕ 加入合併清單", command=self._add_to_merge, bg="#4CAF50", fg="white", font=("Arial", 10, "bold")).pack(fill="x")
-        tk.Button(left_frame, text="🔄 重新整理", command=self._refresh_src_list, font=("Arial", 9)).pack(fill="x", pady=2)
+        self._last_idx = None
 
         # 2. 中間：待合併清單 (Staging Area)
         mid_frame = tk.Frame(main_body, width=260)
         mid_frame.pack(side="left", fill="y", padx=5, pady=10)
         mid_frame.pack_propagate(False)
         tk.Label(mid_frame, text="2. 合併清單", font=("Arial", 10, "bold")).pack(anchor="w")
-        self.merge_listbox = tk.Listbox(mid_frame, font=("Arial", 9))
-        self.merge_listbox.pack(fill="both", expand=True, pady=5)
+        
+        # 先 pack 下方按鈕
+        tk.Button(mid_frame, text="🧹 清除全部歌曲", command=self._clear_all, bg="#757575", fg="white").pack(side="bottom", fill="x", pady=2)
+        tk.Button(mid_frame, text="🗑️ 移除選定歌曲", command=self._remove_from_merge, bg="#f44336", fg="white").pack(side="bottom", fill="x", pady=2)
         
         btn_grid = tk.Frame(mid_frame)
-        btn_grid.pack(fill="x")
-        tk.Button(btn_grid, text="🔼 上移", command=lambda: self._move_item(-1), width=10).pack(side="left", padx=2)
-        tk.Button(btn_grid, text="🔽 下移", command=lambda: self._move_item(1), width=10).pack(side="left", padx=2)
-        tk.Button(mid_frame, text="🗑️ 移除選定歌曲", command=self._remove_from_merge, bg="#f44336", fg="white").pack(fill="x", pady=2)
-        tk.Button(mid_frame, text="🧹 清除全部歌曲", command=self._clear_all, bg="#757575", fg="white").pack(fill="x")
+        btn_grid.pack(side="bottom", fill="x")
+        tk.Button(btn_grid, text="🔼 上移", command=lambda: self._move_item(-1), width=10).pack(side="left", padx=2, expand=True, fill="x")
+        tk.Button(btn_grid, text="🔽 下移", command=lambda: self._move_item(1), width=10).pack(side="left", padx=2, expand=True, fill="x")
+
+        self.merge_listbox = tk.Listbox(mid_frame, font=("Arial", 9))
+        self.merge_listbox.pack(fill="both", expand=True, pady=5)
 
         # 3. 右側：預覽與執行
         right_frame = tk.Frame(self.parent)
@@ -1497,6 +1531,15 @@ class MP3MergerTab:
         self.out_entry.pack(fill="x", pady=5)
         self.out_entry.insert(0, "merged_audio")
 
+        # 融合效果設定 (Crossfade)
+        fade_frame = tk.Frame(right_frame)
+        fade_frame.pack(fill="x", pady=5)
+        tk.Checkbutton(fade_frame, text="✨ 啟用融合效果 (Crossfade)", variable=self.fade_var, 
+                       font=("Arial", 10, "bold"), fg="#1976D2").pack(side="left")
+        tk.Label(fade_frame, text="  融合秒數：").pack(side="left")
+        tk.Spinbox(fade_frame, from_=1, to=5, textvariable=self.fade_sec, width=5).pack(side="left")
+        tk.Label(fade_frame, text="(註：融合需重新轉檔，速度較慢)", font=("Arial", 8), fg="gray").pack(side="left", padx=5)
+
         self.merge_btn = tk.Button(right_frame, text="🚀 開始合併所有歌曲", command=self._do_merge, 
                                    bg="#4CAF50", fg="white", font=("Arial", 12, "bold"), height=2)
         self.merge_btn.pack(fill="x", pady=10)
@@ -1504,6 +1547,7 @@ class MP3MergerTab:
         self.status_label = tk.Label(right_frame, text="", fg="blue")
         self.status_label.pack()
 
+        # 初始化載入檔案
         self._refresh_src_list()
 
     def _browse_folder(self):
@@ -1648,39 +1692,56 @@ class MP3MergerTab:
 
     def _get_info_at(self, ms):
         """根據總時間點找到是對應哪首歌以及在該歌中的相對時間"""
+        if not self.staged_durations: return -1, 0
+        
+        fade_ms = (self.fade_sec.get() * 1000) if self.fade_var.get() else 0
         acc = 0
         for i, dur in enumerate(self.staged_durations):
-            if acc <= ms < acc + dur:
+            # 該首歌在虛擬時間軸上的「可用」長度（扣除與下一首的重疊部分）
+            # 最後一首不扣除
+            effective_dur = dur - fade_ms if i < len(self.staged_durations)-1 else dur
+            if acc <= ms < acc + effective_dur + (fade_ms if i < len(self.staged_durations)-1 else 0):
                 return i, ms - acc
-            acc += dur
-        return len(self.staged_durations) - 1, self.staged_durations[-1] if self.staged_durations else 0
+            acc += effective_dur
+        return len(self.staged_durations) - 1, self.staged_durations[-1]
 
     def _toggle_play(self):
         if not self.staged_files: return
-        mode = self.player.get_mode()
+        p = self.players[self.active_player_idx]
+        mode = p.get_mode()
         if mode == "playing":
-            self.player.pause()
+            for player in self.players: player.pause()
             self.play_btn.config(text="▶ 播放合併效果")
         elif mode == "paused":
-            self.player.resume()
+            for player in self.players: player.resume()
             self.play_btn.config(text="⏸ 暫停")
             self._start_loop()
         else:
             self._play_at(0)
 
     def _play_at(self, total_ms):
+        if not self.staged_files: return
         idx, rel_ms = self._get_info_at(total_ms)
-        if idx != self._current_song_idx:
-            self.player.open(self.staged_files[idx])
-            self._current_song_idx = idx
-        self.player.seek(rel_ms)
-        self.player.play()
-        self.play_btn.config(text="⏸ 暫停")
-        self._start_loop()
+        if idx < 0: return
+        
+        # 停止所有播放
+        for p in self.players: p.stop()
+        
+        self.active_player_idx = 0
+        self._current_song_idx = idx
+        self._next_song_triggered = False
+        
+        p = self.players[self.active_player_idx]
+        if p.open(self.staged_files[idx]):
+            p.seek(rel_ms)
+            p.play()
+            self.play_btn.config(text="⏸ 暫停")
+            self._start_loop()
 
     def _stop(self):
-        self.player.stop()
+        for p in self.players: p.stop()
         self._current_song_idx = -1
+        self._next_song_triggered = False
         self.play_btn.config(text="▶ 播放合併效果")
         if self._update_job:
             self.parent.after_cancel(self._update_job)
@@ -1693,25 +1754,49 @@ class MP3MergerTab:
         self._do_update()
 
     def _do_update(self):
-        if self.player.get_mode() == "playing":
-            rel_pos = self.player.get_position()
-            # 計算總進度
-            acc = sum(self.staged_durations[:self._current_song_idx])
+        p_active = self.players[self.active_player_idx]
+        mode = p_active.get_mode()
+        
+        if mode == "playing":
+            rel_pos = p_active.get_position()
+            fade_ms = (self.fade_sec.get() * 1000) if self.fade_var.get() else 0
+            
+            # 計算在虛擬總時間軸上的位置
+            acc = 0
+            for i in range(self._current_song_idx):
+                eff = self.staged_durations[i] - fade_ms
+                acc += eff
             total_pos = acc + rel_pos
+            
             self.time_label.config(text=f"{self._fmt_ms(total_pos)} / {self._fmt_ms(self.total_ms)}")
             self._draw_canvas(total_pos)
             
-            # 檢查是否該切換下一首
-            if rel_pos >= self.staged_durations[self._current_song_idx] - 100:
+            # 檢查是否進入融合區段 (倒數 fade_ms 毫秒時)
+            dur_current = self.staged_durations[self._current_song_idx]
+            if fade_ms > 0 and rel_pos >= (dur_current - fade_ms) and not self._next_song_triggered:
                 if self._current_song_idx + 1 < len(self.staged_files):
-                    self._play_at(acc + self.staged_durations[self._current_song_idx])
+                    self._next_song_triggered = True
+                    next_idx = self._current_song_idx + 1
+                    other_p_idx = 1 - self.active_player_idx
+                    other_p = self.players[other_p_idx]
+                    if other_p.open(self.staged_files[next_idx]):
+                        other_p.play()
+            
+            # 檢查當前歌曲是否真的結束了
+            if rel_pos >= dur_current - 100:
+                if self._next_song_triggered:
+                    self.active_player_idx = 1 - self.active_player_idx
+                    self._current_song_idx += 1
+                    self._next_song_triggered = False
+                elif self._current_song_idx + 1 < len(self.staged_files):
+                    self._play_at(total_pos)
                     return
                 else:
                     self._stop()
                     return
         
-        if self.player.get_mode() in ("playing", "paused"):
-            self._update_job = self.parent.after(200, self._do_update)
+        if any(p.get_mode() in ("playing", "paused") for p in self.players):
+            self._update_job = self.parent.after(100, self._do_update)
 
     def _canvas_click(self, event):
         if self.total_ms <= 0: return
@@ -1747,23 +1832,44 @@ class MP3MergerTab:
 
     def _run_ffmpeg_merge(self, files, out_path):
         try:
-            # 建立臨時清單檔案供 ffmpeg concat 使用
-            list_file = os.path.join(self.download_path_var.get(), "concat_list.txt")
-            with open(list_file, "w", encoding="utf-8") as f:
-                for fp in files:
-                    # ffmpeg 需要處理路徑中的單引號
-                    p = fp.replace("'", "'\\''")
-                    f.write(f"file '{p}'\n")
-            
-            cmd = ["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", list_file, "-c", "copy", out_path]
-            res = subprocess.run(cmd, capture_output=True, text=True)
-            os.remove(list_file)
-            
+            do_fade = self.fade_var.get()
+            fade_d = self.fade_sec.get()
+
+            if not do_fade:
+                # 傳統高速合併 (concat)
+                list_file = os.path.join(self.download_path_var.get(), "concat_list.txt")
+                with open(list_file, "w", encoding="utf-8") as f:
+                    for fp in files:
+                        p = fp.replace("'", "'\\''")
+                        f.write(f"file '{p}'\n")
+                cmd = ["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", list_file, "-c", "copy", out_path]
+                res = subprocess.run(cmd, capture_output=True, text=True)
+                if os.path.exists(list_file): os.remove(list_file)
+            else:
+                # 融合效果合併 (acrossfade)
+                # 對於多個檔案，需要構建 complex_filter
+                cmd = ["ffmpeg", "-y"]
+                for f in files:
+                    cmd.extend(["-i", f])
+                
+                # 構建濾鏡鏈：[0][1]acrossfade=d=3[a1]; [a1][2]acrossfade=d=3[a2]...
+                filter_str = ""
+                last_label = "[0]"
+                for i in range(1, len(files)):
+                    next_label = f"[a{i}]"
+                    filter_str += f"{last_label}[{i}]acrossfade=d={fade_d}:c1=tri:c2=tri"
+                    if i < len(files) - 1:
+                        filter_str += f"{next_label};"
+                        last_label = next_label
+                
+                cmd.extend(["-filter_complex", filter_str, "-b:a", "320k", out_path])
+                res = subprocess.run(cmd, capture_output=True, text=True)
+
             if res.returncode == 0:
                 self.parent.after(0, lambda: self.status_label.config(text=f"✅ 合併成功：{os.path.basename(out_path)}", fg="green"))
                 self.parent.after(0, self._refresh_src_list)
             else:
-                self.parent.after(0, lambda: self.status_label.config(text="❌ 合併失敗", fg="red"))
+                self.parent.after(0, lambda: self.status_label.config(text="❌ 合併失敗 (FFmpeg 錯誤)", fg="red"))
         except Exception as e:
             self.parent.after(0, lambda: self.status_label.config(text=f"❌ 錯誤: {e}", fg="red"))
         finally:
