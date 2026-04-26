@@ -16,7 +16,7 @@ import ssl
 import ctypes
 
 ssl._create_default_https_context = ssl._create_unverified_context
-APP_VERSION = "2.0.2"
+APP_VERSION = "2.0.4"
 GITHUB_REPO = "mathced-com/CYT_YTDL"
 
 try:
@@ -440,7 +440,7 @@ class YouTubeDownloaderGUI:
                                 launcher_path = os.path.join(exe_dir, '_cyt_update_launch.bat')
                                 bat_content = (
                                     '@echo off\r\n'
-                                    'timeout /t 3 /nobreak > NUL\r\n'
+                                    'timeout /t 6 /nobreak > NUL\r\n'
                                     f'start "" "{current_exe_path}"\r\n'
                                     f'del "%~f0"\r\n'  # 啟動完成後自我刪除
                                 )
@@ -902,6 +902,11 @@ class MCIPlayer:
     def get_mode(self):
         _, val = self._send(f'status {self._alias} mode')
         return val
+
+    def set_volume(self, vol):
+        """設定音量 0-1000；Windows MCI 使用 setaudio volume"""
+        if self._is_open:
+            self._send(f'setaudio {self._alias} volume to {int(vol)}')
 
     def close(self):
         if self._is_open:
@@ -1649,7 +1654,14 @@ class MP3MergerTab:
             self._draw_canvas()
 
     def _update_total(self):
-        self.total_ms = sum(self.staged_durations)
+        n = len(self.staged_files)
+        if n == 0:
+            self.total_ms = 0
+        elif self.fade_var.get() and n > 1:
+            fade_ms = self.fade_sec.get() * 1000
+            self.total_ms = max(0, sum(self.staged_durations) - (n - 1) * fade_ms)
+        else:
+            self.total_ms = sum(self.staged_durations)
         self.time_label.config(text=f"00:00 / {self._fmt_ms(self.total_ms)}")
         self._draw_canvas()
 
@@ -1666,28 +1678,49 @@ class MP3MergerTab:
         c = self.merge_canvas
         w = c.winfo_width()
         h = c.winfo_height()
-        if w <= 1: return
+        if w <= 1 or self.total_ms <= 0: return
         c.delete("all")
         if not self.staged_durations: return
 
-        colors = ["#81C784", "#64B5F6", "#FFD54F", "#BA68C8", "#FF8A65", "#4DB6AC"]
-        start_x = 0
-        acc_ms = 0
+        colors       = ["#81C784", "#64B5F6", "#FFD54F", "#BA68C8", "#FF8A65", "#4DB6AC"]
+        fade_colors  = ["#43A047", "#1E88E5", "#F9A825", "#8E24AA", "#E64A19", "#00897B"]
+        do_fade = self.fade_var.get() and len(self.staged_files) > 1
+        fade_ms = (self.fade_sec.get() * 1000) if do_fade else 0
+
+        acc_virtual = 0  # 虛擬時間軸累積位置 (ms)
         for i, dur in enumerate(self.staged_durations):
-            width = (dur / self.total_ms) * w
-            color = colors[i % len(colors)]
-            c.create_rectangle(start_x, 0, start_x + width, h, fill=color, outline="white")
-            
-            # 在色塊起點標註時間
-            if width > 45: # 寬度足夠才顯示文字，避免重疊
-                t_str = self._fmt_ms(acc_ms)
-                c.create_text(start_x + 3, h - 8, text=t_str, anchor="sw", font=("Arial", 8), fill="#444")
-            
-            start_x += width
-            acc_ms += dur
-        
+            is_last = (i == len(self.staged_durations) - 1)
+            eff_dur = dur - fade_ms if (do_fade and not is_last) else dur
+
+            x0 = int(acc_virtual / self.total_ms * w)
+            x1 = int((acc_virtual + dur) / self.total_ms * w)
+            c.create_rectangle(x0, 0, x1, h, fill=colors[i % len(colors)], outline="")
+
+            # 融合重疊區塊：上半層使用較深色呈現漸變感
+            if do_fade and i > 0:
+                fade_x0 = x0
+                fade_x1 = int((acc_virtual + fade_ms) / self.total_ms * w)
+                # 以斜線漸層模擬重疊 (tkinter無漸層，用半透明窄條代替)
+                step = max(1, (fade_x1 - fade_x0) // 10)
+                prev_color = fade_colors[(i-1) % len(fade_colors)]
+                cur_color  = fade_colors[i % len(fade_colors)]
+                for s in range(fade_x0, fade_x1, step):
+                    ratio = (s - fade_x0) / max(1, fade_x1 - fade_x0)
+                    stripe_color = prev_color if ratio < 0.5 else cur_color
+                    c.create_rectangle(s, 0, s + step, h // 2, fill=stripe_color, outline="")
+                # 標示融合區
+                mid = (fade_x0 + fade_x1) // 2
+                c.create_text(mid, h // 2, text="↔", font=("Arial", 8), fill="white", anchor="center")
+
+            # 標示起始時間
+            if x1 - x0 > 45:
+                t_str = self._fmt_ms(int(acc_virtual))
+                c.create_text(x0 + 3, h - 4, text=t_str, anchor="sw", font=("Arial", 8), fill="#222")
+
+            acc_virtual += eff_dur
+
         # 播放進度條
-        xp = (current_ms / self.total_ms) * w if self.total_ms > 0 else 0
+        xp = int(current_ms / self.total_ms * w) if self.total_ms > 0 else 0
         c.create_rectangle(xp - 2, 0, xp + 2, h, fill="#f44336", outline="")
 
     def _get_info_at(self, ms):
@@ -1757,46 +1790,75 @@ class MP3MergerTab:
         p_active = self.players[self.active_player_idx]
         mode = p_active.get_mode()
         
+        if mode not in ("playing", "paused"):
+            # 播放器已停止但還沒有被正式 stop，嘗試切換到下一首
+            if self._next_song_triggered and self._current_song_idx + 1 < len(self.staged_files):
+                self.active_player_idx = 1 - self.active_player_idx
+                self._current_song_idx += 1
+                self._next_song_triggered = False
+                self._update_job = self.parent.after(100, self._do_update)
+            else:
+                self._stop()
+            return
+
         if mode == "playing":
             rel_pos = p_active.get_position()
             fade_ms = (self.fade_sec.get() * 1000) if self.fade_var.get() else 0
-            
+
             # 計算在虛擬總時間軸上的位置
             acc = 0
             for i in range(self._current_song_idx):
-                eff = self.staged_durations[i] - fade_ms
+                eff = self.staged_durations[i] - fade_ms if (self.fade_var.get() and i < len(self.staged_durations)-1) else self.staged_durations[i]
                 acc += eff
-            total_pos = acc + rel_pos
-            
+            total_pos = min(acc + rel_pos, self.total_ms)
+
             self.time_label.config(text=f"{self._fmt_ms(total_pos)} / {self._fmt_ms(self.total_ms)}")
             self._draw_canvas(total_pos)
-            
-            # 檢查是否進入融合區段 (倒數 fade_ms 毫秒時)
+
             dur_current = self.staged_durations[self._current_song_idx]
-            if fade_ms > 0 and rel_pos >= (dur_current - fade_ms) and not self._next_song_triggered:
-                if self._current_song_idx + 1 < len(self.staged_files):
-                    self._next_song_triggered = True
-                    next_idx = self._current_song_idx + 1
-                    other_p_idx = 1 - self.active_player_idx
-                    other_p = self.players[other_p_idx]
-                    if other_p.open(self.staged_files[next_idx]):
-                        other_p.play()
-            
-            # 檢查當前歌曲是否真的結束了
-            if rel_pos >= dur_current - 100:
+            time_left = dur_current - rel_pos
+
+            # --- 融合區段：啟動下一首 + 模擬音量淡化 ---
+            if fade_ms > 0 and time_left <= fade_ms:
+                if not self._next_song_triggered:
+                    if self._current_song_idx + 1 < len(self.staged_files):
+                        self._next_song_triggered = True
+                        next_idx = self._current_song_idx + 1
+                        other_p = self.players[1 - self.active_player_idx]
+                        if other_p.open(self.staged_files[next_idx]):
+                            other_p.play()
+
+                # 音量模擬：利用 MCI volume 指令 (0-1000)
                 if self._next_song_triggered:
+                    fade_ratio = max(0.0, min(1.0, time_left / fade_ms))
+                    vol_out = int(fade_ratio * 1000)        # 前首：1000->0
+                    vol_in  = int((1.0 - fade_ratio) * 1000) # 後首：0->1000
+                    try:
+                        p_active.set_volume(vol_out)
+                        self.players[1 - self.active_player_idx].set_volume(vol_in)
+                    except Exception:
+                        pass
+
+            # --- 當前歌曲結束：正式切換 ---
+            if time_left <= 100:
+                if self._next_song_triggered:
+                    # 恢復音量後切換主播放器
+                    try:
+                        self.players[1 - self.active_player_idx].set_volume(1000)
+                    except Exception:
+                        pass
                     self.active_player_idx = 1 - self.active_player_idx
                     self._current_song_idx += 1
                     self._next_song_triggered = False
                 elif self._current_song_idx + 1 < len(self.staged_files):
-                    self._play_at(total_pos)
+                    # 無融合模式直接跳下一首 (使用 _play_at 避免卡頓)
+                    self._play_at(total_pos + 1)
                     return
                 else:
                     self._stop()
                     return
-        
-        if any(p.get_mode() in ("playing", "paused") for p in self.players):
-            self._update_job = self.parent.after(100, self._do_update)
+
+        self._update_job = self.parent.after(80, self._do_update)
 
     def _canvas_click(self, event):
         if self.total_ms <= 0: return
@@ -1806,8 +1868,13 @@ class MP3MergerTab:
 
     def _seek_relative(self, delta):
         if self._current_song_idx == -1: return
-        acc = sum(self.staged_durations[:self._current_song_idx])
-        cur_total = acc + self.player.get_position()
+        fade_ms = (self.fade_sec.get() * 1000) if self.fade_var.get() else 0
+        acc = 0
+        for i in range(self._current_song_idx):
+            eff = self.staged_durations[i] - fade_ms if (self.fade_var.get() and i < len(self.staged_durations)-1) else self.staged_durations[i]
+            acc += eff
+        p_active = self.players[self.active_player_idx]
+        cur_total = acc + p_active.get_position()
         new_total = max(0, min(cur_total + delta, self.total_ms))
         self._play_at(new_total)
 
