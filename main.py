@@ -16,7 +16,7 @@ import ssl
 import ctypes
 
 ssl._create_default_https_context = ssl._create_unverified_context
-APP_VERSION = "2.0.5"
+APP_VERSION = "2.0.6"
 GITHUB_REPO = "mathced-com/CYT_YTDL"
 
 try:
@@ -436,13 +436,21 @@ class YouTubeDownloaderGUI:
                                 # 已被 bootloader 的 C 層清理完畢後，才啟動新版程式。
                                 # 這樣新版程式解壓縮時，就不會再誤用到任何舊的路徑。
                                 # =====================================================================
+                                pid = os.getpid()
                                 exe_dir = os.path.dirname(current_exe_path)
                                 launcher_path = os.path.join(exe_dir, '_cyt_update_launch.bat')
+                                # 以 PID 守候取代固定秒數：確保舊程式完全退出後才啟動新版
                                 bat_content = (
                                     '@echo off\r\n'
-                                    'timeout /t 6 /nobreak > NUL\r\n'
+                                    ':waitloop\r\n'
+                                    f'tasklist /FI "PID eq {pid}" 2>NUL | find "{pid}" >NUL\r\n'
+                                    'if not errorlevel 1 (\r\n'
+                                    '    timeout /t 1 /nobreak > NUL\r\n'
+                                    '    goto waitloop\r\n'
+                                    ')\r\n'
+                                    'timeout /t 2 /nobreak > NUL\r\n'
                                     f'start "" "{current_exe_path}"\r\n'
-                                    f'del "%~f0"\r\n'  # 啟動完成後自我刪除
+                                    'del "%~f0"\r\n'
                                 )
                                 try:
                                     with open(launcher_path, 'w', encoding='ascii') as f:
@@ -453,10 +461,10 @@ class YouTubeDownloaderGUI:
                                         close_fds=True
                                     )
                                 except Exception:
-                                    # 備案：直接用 startfile
                                     os.startfile(current_exe_path)
                                 
-                                os._exit(0)
+                                # 用 root.destroy() 允許 Python 正常退出，讓 PyInstaller bootloader 清理 _MEI 
+                                self.root.after(200, self.root.destroy)
                             except Exception as e:
                                 messagebox.showerror("錯誤", f"替換檔案失敗，請檢查權限：\n{e}")
                                 self.update_progress_ui(0, "更新失敗", "red")
@@ -1623,6 +1631,7 @@ class MP3MergerTab:
                 failed_count += 1
         
         self._update_total()
+        self._update_out_filename()
         if failed_count > 0:
             messagebox.showwarning("警告", f"有 {failed_count} 個檔案無法讀取資訊。")
 
@@ -1635,6 +1644,7 @@ class MP3MergerTab:
         self.staged_durations.pop(idx)
         self.merge_listbox.delete(idx)
         self._update_total()
+        self._update_out_filename()
 
     def _move_item(self, direction):
         sel = self.merge_listbox.curselection()
@@ -1652,6 +1662,7 @@ class MP3MergerTab:
             self.merge_listbox.insert(new_idx, txt)
             self.merge_listbox.selection_set(new_idx)
             self._draw_canvas()
+            self._update_out_filename()
 
     def _update_total(self):
         n = len(self.staged_files)
@@ -1664,6 +1675,16 @@ class MP3MergerTab:
             self.total_ms = sum(self.staged_durations)
         self.time_label.config(text=f"00:00 / {self._fmt_ms(self.total_ms)}")
         self._draw_canvas()
+
+    def _update_out_filename(self):
+        """以合併清單第一首歌的檔名作為預設輸出檔名"""
+        if self.staged_files:
+            stem = os.path.splitext(os.path.basename(self.staged_files[0]))[0]
+            self.out_entry.delete(0, tk.END)
+            self.out_entry.insert(0, f"{stem}_merged")
+        else:
+            self.out_entry.delete(0, tk.END)
+            self.out_entry.insert(0, "merged_audio")
 
     def _clear_all(self):
         if not self.staged_files: return
@@ -1789,26 +1810,27 @@ class MP3MergerTab:
     def _do_update(self):
         p_active = self.players[self.active_player_idx]
         mode = p_active.get_mode()
-        
+
         if mode not in ("playing", "paused"):
-            # 播放器已停止但還沒有被正式 stop，嘗試切換到下一首
             if self._next_song_triggered and self._current_song_idx + 1 < len(self.staged_files):
+                # 切換到預加載的下一首
                 self.active_player_idx = 1 - self.active_player_idx
                 self._current_song_idx += 1
                 self._next_song_triggered = False
-                self._update_job = self.parent.after(100, self._do_update)
+                self._update_job = self.parent.after(80, self._do_update)
             else:
                 self._stop()
             return
 
         if mode == "playing":
             rel_pos = p_active.get_position()
-            fade_ms = (self.fade_sec.get() * 1000) if self.fade_var.get() else 0
+            do_fade = self.fade_var.get()
+            fade_ms = (self.fade_sec.get() * 1000) if do_fade else 0
 
-            # 計算在虛擬總時間軸上的位置
+            # 計算虛擬總進度
             acc = 0
             for i in range(self._current_song_idx):
-                eff = self.staged_durations[i] - fade_ms if (self.fade_var.get() and i < len(self.staged_durations)-1) else self.staged_durations[i]
+                eff = self.staged_durations[i] - fade_ms if (do_fade and i < len(self.staged_durations)-1) else self.staged_durations[i]
                 acc += eff
             total_pos = min(acc + rel_pos, self.total_ms)
 
@@ -1817,41 +1839,46 @@ class MP3MergerTab:
 
             dur_current = self.staged_durations[self._current_song_idx]
             time_left = dur_current - rel_pos
+            has_next = (self._current_song_idx + 1 < len(self.staged_files))
 
-            # --- 融合區段：啟動下一首 + 模擬音量淡化 ---
-            if fade_ms > 0 and time_left <= fade_ms:
-                if not self._next_song_triggered:
-                    if self._current_song_idx + 1 < len(self.staged_files):
-                        self._next_song_triggered = True
-                        next_idx = self._current_song_idx + 1
-                        other_p = self.players[1 - self.active_player_idx]
-                        if other_p.open(self.staged_files[next_idx]):
-                            other_p.play()
+            # ---- 預加載下一首 (fade 或非 fade 都在歌曲快結束時預備) ----
+            PRELOAD_MS = max(fade_ms, 2000)  # 至少提前 2 秒預加載
+            if has_next and time_left <= PRELOAD_MS and not self._next_song_triggered:
+                self._next_song_triggered = True
+                next_idx = self._current_song_idx + 1
+                other_p = self.players[1 - self.active_player_idx]
+                if do_fade:
+                    # 融合模式：預加載且立即播放
+                    if other_p.open(self.staged_files[next_idx]):
+                        other_p.play()
+                else:
+                    # 非融合模式：預加載但不播放，等切換時才啟
+                    other_p.open(self.staged_files[next_idx])
 
-                # 音量模擬：利用 MCI volume 指令 (0-1000)
+            # ---- 融合音量漸變 ----
+            if do_fade and self._next_song_triggered and time_left <= fade_ms:
+                fade_ratio = max(0.0, min(1.0, time_left / max(fade_ms, 1)))
+                try:
+                    p_active.set_volume(int(fade_ratio * 1000))
+                    self.players[1 - self.active_player_idx].set_volume(int((1.0 - fade_ratio) * 1000))
+                except Exception:
+                    pass
+
+            # ---- 當前歌曲結束：切換主播放器 ----
+            if time_left <= 80:
                 if self._next_song_triggered:
-                    fade_ratio = max(0.0, min(1.0, time_left / fade_ms))
-                    vol_out = int(fade_ratio * 1000)        # 前首：1000->0
-                    vol_in  = int((1.0 - fade_ratio) * 1000) # 後首：0->1000
-                    try:
-                        p_active.set_volume(vol_out)
-                        self.players[1 - self.active_player_idx].set_volume(vol_in)
-                    except Exception:
-                        pass
-
-            # --- 當前歌曲結束：正式切換 ---
-            if time_left <= 100:
-                if self._next_song_triggered:
-                    # 恢復音量後切換主播放器
                     try:
                         self.players[1 - self.active_player_idx].set_volume(1000)
                     except Exception:
                         pass
+                    if not do_fade:
+                        # 非融合模式：現在才啟始播放預加載的歌曲
+                        self.players[1 - self.active_player_idx].play()
                     self.active_player_idx = 1 - self.active_player_idx
                     self._current_song_idx += 1
                     self._next_song_triggered = False
-                elif self._current_song_idx + 1 < len(self.staged_files):
-                    # 無融合模式直接跳下一首 (使用 _play_at 避免卡頓)
+                elif has_next:
+                    # 安全備案：不應發生
                     self._play_at(total_pos + 1)
                     return
                 else:
