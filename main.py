@@ -17,7 +17,7 @@ import ctypes
 import math
 
 ssl._create_default_https_context = ssl._create_unverified_context
-APP_VERSION = "2.4.1"
+APP_VERSION = "2.4.2"
 GITHUB_REPO = "mathced-com/CYT_YTDL"
 
 # ===========================================================================
@@ -136,6 +136,11 @@ class YouTubeDownloaderGUI:
         self.current_chapters = []
         self.split_by_chapters = tk.BooleanVar(value=False)
         self._downloaded_filepath = None  # 追蹤最後下載的完整檔案路徑
+        
+        # 字幕相關
+        self.download_subtitles = tk.BooleanVar(value=False)
+        self.selected_sub_lang = tk.StringVar(value="")
+        self.current_subtitles_map = {}  # 顯示名稱 -> (語言代碼, 是否為自動字幕)
         
         # 載入持久化配置
         self.config_path = os.path.join(self.app_dir, "config.json")
@@ -1024,12 +1029,16 @@ class YouTubeDownloaderGUI:
                 chapters = info.get('chapters') or []
                 self.current_chapters = chapters
                 
+                # 取得字幕資料
+                subs_map = self._parse_subtitles_info(info)
+                self.current_subtitles_map = subs_map
+                
                 # 優先從多個欄位尋找圖片
                 thumb_url = info.get('thumbnail')
                 if not thumb_url and info.get('thumbnails'):
                     thumb_url = info['thumbnails'][-1].get('url') # 抓最後一張通常最大
                     
-                self.root.after(0, lambda: self.show_single_video(title, dur_str, thumb_url, chapters))
+                self.root.after(0, lambda: self.show_single_video(title, dur_str, thumb_url, chapters, subs_map))
                 
         except Exception as e:
             err_str = str(e)
@@ -1090,13 +1099,138 @@ class YouTubeDownloaderGUI:
         self.download_btn.config(state="normal")
         self.update_progress_ui(0, "解析完成！點擊「開始下載」以下載全集", "green")
 
-    def show_single_video(self, title, dur_str, thumb_url, chapters=None):
+    def _parse_subtitles_info(self, info):
+        """解析影片資訊中的字幕並整理為友善名稱字典"""
+        if not info:
+            return {}
+            
+        subs = info.get('subtitles') or {}
+        auto_subs = info.get('automatic_captions') or {}
+        
+        lang_names = {
+            'zh-Hant': '繁體中文',
+            'zh-TW': '繁體中文 (台灣)',
+            'zh-HK': '繁體中文 (香港)',
+            'zh-Hans': '簡體中文',
+            'zh-CN': '簡體中文 (中國)',
+            'zh-SG': '簡體中文 (新加坡)',
+            'zh': '中文',
+            'en': '英文 (English)',
+            'en-US': '美式英文 (US)',
+            'en-GB': '英式英文 (UK)',
+            'ja': '日文 (Japanese)',
+            'ko': '韓文 (Korean)',
+            'es': '西班牙文 (Spanish)',
+            'fr': '法文 (French)',
+            'de': '德文 (German)',
+            'ru': '俄文 (Russian)',
+            'vi': '越南文 (Vietnamese)',
+            'th': '泰文 (Thai)',
+            'id': '印尼文 (Indonesian)',
+        }
+        
+        result = {}
+        # 1. 創作者/官方提供字幕
+        for code, flist in subs.items():
+            raw_name = flist[0].get('name') if flist and isinstance(flist, list) else ''
+            display = lang_names.get(code) or raw_name or code
+            display_name = f"{display} [{code}]"
+            result[display_name] = (code, False)
+            
+        # 2. 自動產生字幕（選取常用重要語言）
+        primary_auto_langs = ['zh-Hant', 'zh-TW', 'zh-Hans', 'zh', 'en', 'ja', 'ko']
+        for code in primary_auto_langs:
+            if code in auto_subs and code not in subs:
+                flist = auto_subs[code]
+                raw_name = flist[0].get('name') if flist and isinstance(flist, list) else ''
+                display = lang_names.get(code) or raw_name or code
+                display_name = f"{display} (自動) [{code}]"
+                result[display_name] = (code, True)
+                
+        # 3. 若手動完全無字幕，列出自動字幕前 15 種
+        if not result and auto_subs:
+            for code, flist in list(auto_subs.items())[:15]:
+                raw_name = flist[0].get('name') if flist and isinstance(flist, list) else ''
+                display = lang_names.get(code) or raw_name or code
+                display_name = f"{display} (自動) [{code}]"
+                result[display_name] = (code, True)
+                
+        return result
+
+    def download_subtitles_only(self):
+        """僅下載指定語言的字幕檔案 (.srt)"""
+        if not getattr(self, 'video_info', None):
+            messagebox.showwarning("提示", "請先解析影片網址！")
+            return
+            
+        sel_display = self.selected_sub_lang.get()
+        if not sel_display or not getattr(self, 'current_subtitles_map', None):
+            messagebox.showwarning("提示", "本影片未偵測到可用字幕！")
+            return
+            
+        sub_info = self.current_subtitles_map.get(sel_display)
+        if not sub_info:
+            messagebox.showwarning("提示", "無效的字幕語言選項！")
+            return
+            
+        lang_code, is_auto = sub_info
+        url = self.url_entry.get().strip()
+        save_dir = self.download_path.get()
+        if not os.path.exists(save_dir):
+            try:
+                os.makedirs(save_dir, exist_ok=True)
+            except Exception:
+                save_dir = os.path.abspath("download")
+                os.makedirs(save_dir, exist_ok=True)
+                
+        self.update_progress_ui(0, f"正在下載字幕 ({sel_display})...", "blue")
+        
+        def run_sub_download():
+            ydl_opts = {
+                'quiet': True,
+                'skip_download': True,
+                'writesubtitles': True,
+                'writeautomaticsub': is_auto,
+                'subtitleslangs': [lang_code],
+                'subtitlesformat': 'srt',
+                'outtmpl': os.path.join(save_dir, '%(title)s [%(id)s].%(ext)s'),
+                'postprocessors': [{'key': 'FFmpegSubtitlesConvertor', 'format': 'srt'}],
+                'ffmpeg_location': self.app_dir,
+                'nocheckcertificate': True,
+                'socket_timeout': 30,
+                'extractor_args': {'youtube': {'player_client': ['android', 'web']}},
+            }
+            
+            browser_choice = self.cookie_browser.get()
+            if browser_choice == "選擇 .txt 檔案...":
+                cookie_file = self.cookie_file_path.get()
+                if os.path.exists(cookie_file):
+                    ydl_opts['cookiefile'] = cookie_file
+            elif browser_choice != "無":
+                ydl_opts['cookiesfrombrowser'] = (browser_choice,)
+                
+            try:
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    ydl.download([url])
+                    
+                self.root.after(0, lambda: self.update_progress_ui(100.0, "字幕 (.srt) 下載完成！", "green"))
+                self.root.after(0, lambda: messagebox.showinfo(
+                    "字幕下載成功", 
+                    f"字幕檔案已成功下載！\n\n語言：{sel_display}\n儲存至：\n{save_dir}"
+                ))
+            except Exception as e:
+                self.root.after(0, lambda: self.update_progress_ui(0, "字幕下載失敗", "red"))
+                self.root.after(0, lambda: messagebox.showerror("錯誤", f"下載字幕失敗：\n{e}"))
+                
+        threading.Thread(target=run_sub_download, daemon=True).start()
+
+    def show_single_video(self, title, dur_str, thumb_url, chapters=None, subs_map=None):
         self.title_label.config(text="【單一影片解析結果】")
         for widget in self.list_frame.scrollable_frame.winfo_children():
             widget.destroy()
             
-        # 有章節時需要更多高度
-        canvas_height = 200 if chapters else 150
+        # 有章節或字幕時需要更多高度
+        canvas_height = 250 if (chapters and subs_map) else (200 if (chapters or subs_map) else 150)
         self.list_frame.pack(fill="both", expand=True, padx=10, pady=5)
         self.list_frame.canvas.config(height=canvas_height)
         try:
@@ -1145,6 +1279,63 @@ class YouTubeDownloaderGUI:
                 wraplength=700
             )
             self.chapter_preview_label.pack(fill="x", padx=15, pady=(0, 5))
+
+        # 若偵測到字幕，顯示字幕選項
+        if subs_map:
+            sub_frame = tk.Frame(self.list_frame.scrollable_frame, pady=5, padx=5)
+            sub_frame.pack(fill="x", anchor="w")
+            
+            self.download_subtitles.set(False)
+            chk_sub = tk.Checkbutton(
+                sub_frame,
+                text="💬 同步下載字幕 (.srt)：",
+                variable=self.download_subtitles,
+                font=("Microsoft JhengHei", 10, "bold"),
+                fg="#00796B"
+            )
+            chk_sub.pack(side="left", padx=5)
+            
+            lang_options = list(subs_map.keys())
+            default_choice = lang_options[0]
+            for opt in lang_options:
+                if any(x in opt for x in ["繁體中文", "zh-Hant", "zh-TW"]):
+                    default_choice = opt
+                    break
+                elif any(x in opt for x in ["簡體中文", "zh-Hans"]):
+                    default_choice = opt
+                elif any(x in opt for x in ["英文", "[en]"]):
+                    default_choice = opt
+                    
+            self.selected_sub_lang.set(default_choice)
+            self.sub_lang_combo = ttk.Combobox(
+                sub_frame,
+                textvariable=self.selected_sub_lang,
+                values=lang_options,
+                state="readonly",
+                width=24,
+                font=("Microsoft JhengHei", 9)
+            )
+            self.sub_lang_combo.pack(side="left", padx=5)
+            
+            sub_only_btn = tk.Button(
+                sub_frame,
+                text="📥 僅下載此字幕",
+                font=("Microsoft JhengHei", 9, "bold"),
+                bg="#009688",
+                fg="white",
+                relief="flat",
+                cursor="hand2",
+                command=self.download_subtitles_only
+            )
+            sub_only_btn.pack(side="left", padx=8)
+        else:
+            no_sub_label = tk.Label(
+                self.list_frame.scrollable_frame,
+                text="💬 本影片未提供字幕",
+                font=("Microsoft JhengHei", 9),
+                fg="gray"
+            )
+            no_sub_label.pack(anchor="w", padx=15, pady=(2, 5))
         
         self.update_progress_ui(0, "解析完成！請確認資訊後點擊「開始下載」", "green")
         self.download_btn.config(state="normal")
@@ -1351,12 +1542,24 @@ class YouTubeDownloaderGUI:
                     f"({cur_idx}/{tot_cnt}) 下載進度: {percent_str} (速度: {speed}, 剩餘: {eta})", 
                     "blue"
                 ))
+            elif not self.is_playlist:
+                ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+                percent_str = ansi_escape.sub('', d.get('_percent_str', f'{percent_val:.1f}%')).strip()
+                speed = ansi_escape.sub('', d.get('_speed_str', 'N/A')).strip()
+                eta = ansi_escape.sub('', d.get('_eta_str', 'N/A')).strip()
+                self.root.after(0, lambda: self.update_progress_ui(
+                    percent_val, 
+                    f"下載進度: {percent_str} (速度: {speed}, 剩餘: {eta})", 
+                    "blue"
+                ))
             
         elif d['status'] == 'finished':
             if self.is_playlist and hasattr(self, 'playlist_status_labels') and len(self.playlist_status_labels) > idx:
                 lbl = self.playlist_status_labels[idx]
                 if lbl and lbl.winfo_exists():
                     self.root.after(0, lambda: lbl.config(text="🔄 合併轉檔中...", fg="orange"))
+            elif not self.is_playlist:
+                self.root.after(0, lambda: self.update_progress_ui(100.0, "單檔下載完成！正在合併影像或轉檔... (此階段無法暫停)", "orange"))
 
     def start_download(self):
         save_dir = self.download_path.get()
@@ -1482,6 +1685,24 @@ class YouTubeDownloaderGUI:
                 'player_client': ['android', 'web']
             }
         }
+
+        # 支援同步下載字幕
+        if getattr(self, 'download_subtitles', None) and self.download_subtitles.get() and getattr(self, 'current_subtitles_map', None):
+            sel_display = self.selected_sub_lang.get()
+            sub_info = self.current_subtitles_map.get(sel_display)
+            if sub_info:
+                lang_code, is_auto = sub_info
+                ydl_opts['writesubtitles'] = True
+                if is_auto:
+                    ydl_opts['writeautomaticsub'] = True
+                ydl_opts['subtitleslangs'] = [lang_code]
+                ydl_opts['subtitlesformat'] = 'srt'
+                if 'postprocessors' not in ydl_opts:
+                    ydl_opts['postprocessors'] = []
+                ydl_opts['postprocessors'].insert(0, {
+                    'key': 'FFmpegSubtitlesConvertor',
+                    'format': 'srt'
+                })
 
         # 定義單個項目的下載執行函數，回傳 (idx, success_status)
         def download_single_item(item_info):
